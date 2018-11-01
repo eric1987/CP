@@ -2,3 +2,5 @@
 *.db
 *.opendb
 *.tlog
+DrangerEdit/main - 保留.cpp
+DrangerEdit/simple.cpp

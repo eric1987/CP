@@ -1,26 +1,6 @@
-// tutorial05.c
-// A pedagogical video player that really works!
-//
-// Code based on FFplay, Copyright (c) 2003 Fabrice Bellard, 
-// and a tutorial by Martin Bohme (boehme@inb.uni-luebeckREMOVETHIS.de)
-// Tested on Gentoo, CVS version 5/01/07 compiled with GCC 4.1.1
-// With updates from https://github.com/chelyaev/ffmpeg-tutorial
-// Updates tested on:
-// LAVC 54.59.100, LAVF 54.29.104, LSWS 2.1.101, SDL 1.2.15
-// on GCC 4.7.2 in Debian February 2015
-// Use
-//
-// gcc -o tutorial05 tutorial05.c -lavformat -lavcodec -lswscale -lz -lm `sdl-config --cflags --libs`
-// to build (assuming libavformat and libavcodec are correctly installed, 
-// and assuming you have sdl-config. Please refer to SDL docs for your installation.)
-//
-// Run using
-// tutorial04 myvideofile.mpg
-//
-// to play the video stream on your screen.
 #include "Player.h"
 
-#if 0
+
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -41,6 +21,9 @@ extern "C"
 #ifdef __MINGW32__
 #undef main /* Prevents SDL from overriding main() */
 #endif
+
+#define USE_SDL 1
+#define USE_QT 0
 
 #include <QtMultimedia/QAudioOutput>
 #include <QtMultimedia/QAudioFormat>
@@ -120,6 +103,7 @@ bool f_pushed = false;
 int f_num = 0;
 
 uchar *med_buffer;
+unsigned char *out_buffer;
 QIODevice *out;
 SwrContext *swr_ctx;
 
@@ -154,10 +138,10 @@ double frame_timer;
 void SDLRending(AVFrame *disframe);
 
 double video_clock;	//
-// int64_t audio_clock;	//
-// int64_t frame_timer;
-// int64_t delay;
-// int64_t actual_delay;
+					// int64_t audio_clock;	//
+					// int64_t frame_timer;
+					// int64_t delay;
+					// int64_t actual_delay;
 
 bool paIsPushed()
 {
@@ -256,7 +240,7 @@ int deapkt(queue<AVPacket *> &q, AVPacket *pkt)
 int clear_qpkt(queue<AVPacket *> &q, mutex &m, int &size, bool &b_pushed)
 {
 	lock_guard<mutex> ulock(m);
-	for (int i=0; i<q.size(); i++)
+	for (int i = 0; i<q.size(); i++)
 	{
 		AVPacket *pkt = q.front();
 		q.pop();
@@ -345,9 +329,17 @@ int deframeinfo(queue<FrameInfo> &q, AVFrame *frame, double &pts)
 	}
 }
 
-int64_t get_ref_clock()
+double get_ref_clock()
 {
 	return av_gettime() / 1000000;
+}
+
+double get_video_clock()
+{
+	double delta;
+
+	delta = (av_gettime() - video_current_pts_time) / 1000000.0;
+	return video_current_pts + delta;
 }
 
 double synchronize_video(AVFrame *frame, double pts)
@@ -374,18 +366,18 @@ void video_refresh_timer(double pts, AVFrame *frame)
 {
 	double actual_delay, delay, sync_threshold, ref_clock, diff;
 
-	if (video_index >= 0) 
+	if (video_index >= 0)
 	{
-		/*if (qFrameInfo.size() == 0) 
+		/*if (qFrameInfo.size() == 0)
 		{
-			this_thread::sleep_for(chrono::milliseconds(1));
+		this_thread::sleep_for(chrono::milliseconds(1));
 		}*/
 		//else 
 		{
 			video_current_pts = pts;
 			video_current_pts_time = av_gettime();
 			delay = pts - frame_last_pts; /* the pts from last time */
-			if (delay <= 0 || delay >= 1.0) 
+			if (delay <= 0 || delay >= 1.0)
 			{
 				/* if incorrect delay, use previous one */
 				delay = frame_last_delay;
@@ -417,18 +409,19 @@ void video_refresh_timer(double pts, AVFrame *frame)
 				/* Really it should skip the picture instead */
 				actual_delay = 0.010;
 			}
-			this_thread::sleep_for(chrono::milliseconds((int)(actual_delay *1000+0.5)));
+			this_thread::sleep_for(chrono::milliseconds((int)(actual_delay * 1000 + 0.5)));
 
 			/* show the picture! */
-			if (seek_log2)
-			{
-				seek_log2 = 0;
-				steady_clock::time_point t2 = steady_clock::now();
-				duration<double> time_span = duration_cast<duration<double>>(t2 - t) * 1000;
-				cout << "show The Img took me " << time_span.count() << " milliseconds." << endl;
-			}
 
+#if USE_QT
+			QImage img((uchar *)out_buffer, vctx->width,
+				vctx->height, QImage::Format_RGB32);
+			QImage temp = img.copy();
+#endif
+			
+#if USE_SDL
 			SDLRending(frame);
+#endif
 		}
 	}
 	else {
@@ -462,7 +455,6 @@ void parse_thread(AVFormatContext *fmt_ctx)
 			}
 			//int64_t timestamp = seek_pos*av_q2d(fmt_ctx->streams[video_index]->time_base);
 			AVRational baseQ = AVRational{ 1, AV_TIME_BASE };
-			seek_pos *= 1000000;
 			int64_t timestamp = av_rescale_q(seek_pos, baseQ,
 				fmt_ctx->streams[video_index]->time_base);
 			seek_pos = 0;
@@ -474,7 +466,7 @@ void parse_thread(AVFormatContext *fmt_ctx)
 			this_thread::sleep_for(chrono::milliseconds(10));
 			continue;
 		}
-		
+
 		ret = av_read_frame(fmt_ctx, pkt);
 		if (ret < 0)
 		{
@@ -537,7 +529,7 @@ void de_athread(AVCodecContext *av_ctx)
 		ret = avcodec_send_packet(av_ctx, pkt);
 		if (ret < 0)
 			continue;
-		
+
 		while (pkt->size > 0)
 		{
 			int len, data_size = MAX_AUDIO_FRAME_SIZE;
@@ -555,7 +547,7 @@ void de_athread(AVCodecContext *av_ctx)
 				(const uint8_t **)frame->data, frame->nb_samples);
 
 			out->write((char *)med_buffer, outsize);
-			
+
 			pkt->size -= len;
 			pkt->data += len;
 
@@ -591,7 +583,7 @@ void de_vthread(AVCodecContext *av_ctx)
 			continue;
 		}
 		ret = devpkt(qVPkt, pkt);
-		
+
 		if (ret < 0)
 		{
 			if (eof)
@@ -620,17 +612,17 @@ void de_vthread(AVCodecContext *av_ctx)
 		if (ret < 0)
 			continue;
 
-		//pts = frame->pts;
-		//pts *= av_q2d(fmt_ctx->streams[video_index]->time_base);
+		pts = frame->pts;
+		pts *= av_q2d(fmt_ctx->streams[video_index]->time_base);
 
-		//pts = synchronize_video(frame, pts);
+		pts = synchronize_video(frame, pts);
 
 		//enframe(qFrame, frame);
 		enframeinfo(qFrameInfo, frame, pts);
 
 		av_frame_unref(frame);
 		av_packet_unref(pkt);
-		this_thread::sleep_for(chrono::milliseconds(20));
+		//this_thread::sleep_for(chrono::milliseconds(20));
 	}
 
 	int endofthread = 1;
@@ -648,9 +640,9 @@ void toImage(AVCodecContext *ctx)
 {
 	AVFrame *frame = av_frame_alloc();
 	AVFrame *disFrame = av_frame_alloc();
-	
-	unsigned char *out_buffer = (unsigned char *)av_malloc(av_image_get_buffer_size
-		(pix_fmt, ctx->width, ctx->height, 1));
+
+	out_buffer = (unsigned char *)av_malloc(av_image_get_buffer_size
+	(pix_fmt, ctx->width, ctx->height, 1));
 	av_image_fill_arrays(disFrame->data, disFrame->linesize, out_buffer,
 		pix_fmt, ctx->width, ctx->height, 1);
 
@@ -682,7 +674,7 @@ void toImage(AVCodecContext *ctx)
 			frame->height, disFrame->data, disFrame->linesize);
 
 		/*QImage img((uchar *)out_buffer, ctx->width,
-			ctx->height, QImage::Format_RGB32);
+		ctx->height, QImage::Format_RGB32);
 		QString filename = QString("D:/work/Resource/pic/") + QString::number(i) + QString("pic.png");
 		QImage temp = img.copy();
 		img.save(filename);*/
@@ -727,7 +719,7 @@ void Pause()
 	pause = !pause;
 }
 
-void SeekPos()
+void SeekPos(double pos)
 {
 	mutex m;
 	t = steady_clock::now();
@@ -735,10 +727,55 @@ void SeekPos()
 	frame_timer = (double)av_gettime() / 1000000;
 
 	seek_req = 1;
-	seek_pos = 10;
+	seek_pos = pos;
 }
 
-int play()
+void Forward()
+{
+	double pos = video_clock;
+	pos += 10;
+	pos *= AV_TIME_BASE;
+	SeekPos(pos);
+}
+
+void Backward()
+{
+	double pos = video_clock;
+	pos -= 10;
+	pos *= AV_TIME_BASE;
+	SeekPos(pos);
+}
+
+void SDLEventHandle()
+{
+	SDL_Event event;
+	while (true)
+	{
+		SDL_WaitEvent(&event);
+		switch (event.type)
+		{
+		case SDL_KEYDOWN:
+			switch (event.key.keysym.sym)
+			{
+			case SDLK_LEFT:
+				Backward();
+				break;
+			case SDLK_RIGHT:
+				Forward();
+			default:
+				break;
+			}
+			break;
+		case SDL_MOUSEBUTTONDOWN:
+			Pause();
+			break;
+		default:
+			break;
+		}
+	}
+}
+
+int play(string url)
 {
 	int ret = -1;
 
@@ -748,19 +785,23 @@ int play()
 	av_init_packet(&flush_pkt);
 	flush_pkt.data = (uint8_t *)&flush_pkt;
 
+#if USE_SDL
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER))
 	{
 		return -1;
 	}
+#endif
 
-	char url[] = "D:/work/Resource/oceans.mp4";
+	//char filename[] = "D:/work/Resource/oceans.mp4";
+	char *filename = (char *)url.c_str();
+	//memcpy(filename, url.c_str(), sizeof(url.c_str()));
 
 	fmt_ctx = nullptr;
-	avformat_open_input(&fmt_ctx, url, nullptr, nullptr);
+	avformat_open_input(&fmt_ctx, filename, nullptr, nullptr);
 
 	avformat_find_stream_info(fmt_ctx, nullptr);
 
-	av_dump_format(fmt_ctx, 0, url, 0);
+	av_dump_format(fmt_ctx, 0, filename, 0);
 
 	for (int i = 0; i < fmt_ctx->nb_streams; i++)
 	{
@@ -768,7 +809,7 @@ int play()
 		{
 			video_index = i;
 		}
-		else if(fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+		else if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
 		{
 			audio_index = i;
 		}
@@ -776,7 +817,7 @@ int play()
 
 	vctx = nullptr;
 	AVCodec *vcodec = nullptr;
-	
+
 	vctx = avcodec_alloc_context3(nullptr);
 	if (!vctx)
 	{
@@ -832,8 +873,10 @@ int play()
 			0, 0);
 		swr_init(swr_ctx);
 	}
-	
+
+#if USE_SDL
 	SDLConfiguration(vctx);
+#endif
 
 	frame_last_delay = 40e-3;
 	video_current_pts_time = av_gettime();
@@ -846,75 +889,27 @@ int play()
 	if (audio_index >= 0)
 	{
 		thread audio(de_athread, ref(actx));
-		
-		SDL_Event event;
-		while (true)
-		{
-			SDL_WaitEvent(&event);
-			switch (event.type)
-			{
-			case SDL_KEYDOWN:
-				SeekPos();
-				break;
-			case SDL_MOUSEBUTTONDOWN:
-				Pause();
-				break;
-			default:
-				break;
-			}
-		}
-
-		while (false)
-		{
-			cout << "input order: " << endl;
-			string str;
-			cin >> str;
-			if (str == "q")
-			{
-				break;
-			}
-			else if (str == "pause")
-			{
-				pause = true;
-			}
-			else if (str == "quit")
-			{
-				be_exit = 1;
-				break;
-			}
-			else if (str == "10")
-			{
-				seek_req = 1;
-				seek_pos = 10;
-			}
-			else
-			{
-				frame_timer = (double)av_gettime() / 1000000.0;
-				pause = false;
-			}
-			this_thread::sleep_for(chrono::milliseconds(10));
-		}
+		SDLEventHandle();
 		audio.join();
 	}
 
 	producer.join();
 	consumer.join();
 	converter.join();
-	
+
 	quit_play();
-
 }
-#endif
 
-
-int main(int argc, char *argv[])
+Player::Player()
 {
-	Player p;
-	p.playurl();
-	
-	/*while (true)
-	{
-		this_thread::sleep_for(chrono::milliseconds(3000));
-		int x = 0;
-	}*/
+}
+
+
+Player::~Player()
+{
+}
+
+void Player::playurl()
+{
+	play("D:/work/Resource/oceans.mp4");
 }

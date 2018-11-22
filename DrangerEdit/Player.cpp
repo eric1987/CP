@@ -88,8 +88,6 @@ condition_variable pv_conV;
 bool pa_pushed = false;
 bool pv_pushed = false;
 
-chrono::steady_clock::time_point t;
-
 struct FrameInfo
 {
 	AVFrame *frame;
@@ -137,11 +135,12 @@ int64_t video_current_pts_time;
 double frame_timer;
 void SDLRending(AVFrame *disframe);
 
-double video_clock;	//
-					// int64_t audio_clock;	//
-					// int64_t frame_timer;
-					// int64_t delay;
-					// int64_t actual_delay;
+double video_clock;	
+					
+// int64_t audio_clock;
+// int64_t frame_timer;
+// int64_t delay;
+// int64_t actual_delay;
 
 bool paIsPushed()
 {
@@ -447,7 +446,7 @@ void parse_thread(AVFormatContext *fmt_ctx)
 				clear_qpkt(qAPkt, pa_mutex, pa_size, pa_pushed);
 				enapkt(qAPkt, &flush_pkt);
 			}
-			else if (video_index >= 0)
+			if (video_index >= 0)
 			{
 				clear_qpkt(qVPkt, pv_mutex, pv_size, pv_pushed);
 				clear_qframe(qFrameInfo, cf_mutex, f_num, f_pushed);
@@ -722,7 +721,6 @@ void Pause()
 void SeekPos(double pos)
 {
 	mutex m;
-	t = steady_clock::now();
 	lock_guard<mutex> lock(m);
 	frame_timer = (double)av_gettime() / 1000000;
 
@@ -797,9 +795,9 @@ int play(string url)
 	//memcpy(filename, url.c_str(), sizeof(url.c_str()));
 
 	fmt_ctx = nullptr;
-	avformat_open_input(&fmt_ctx, filename, nullptr, nullptr);
+	ret = avformat_open_input(&fmt_ctx, filename, nullptr, nullptr);
 
-	avformat_find_stream_info(fmt_ctx, nullptr);
+	ret = avformat_find_stream_info(fmt_ctx, nullptr);
 
 	av_dump_format(fmt_ctx, 0, filename, 0);
 
@@ -886,12 +884,12 @@ int play(string url)
 	thread producer(parse_thread, ref(fmt_ctx));
 	thread consumer(de_vthread, ref(vctx));
 	thread converter(toImage, ref(vctx));
-	if (audio_index >= 0)
-	{
-		thread audio(de_athread, ref(actx));
+	//if (audio_index >= 0)
+	//{
+	//	thread audio(de_athread, ref(actx));
 		SDLEventHandle();
-		audio.join();
-	}
+	//	audio.join();
+	//}
 
 	producer.join();
 	consumer.join();
@@ -909,7 +907,11 @@ Player::~Player()
 {
 }
 
-void Player::playurl()
+void Player::playurl(QString str)
 {
-	play("D:/work/Resource/oceans.mp4");
+	//play("D:/work/Resource/oceans.mp4");
+	QByteArray ba = str.toLocal8Bit();
+	char *x = ba.data();
+	play(x);
+	//play("http://ivi.bupt.edu.cn/hls/cctv5hd.m3u8");
 }

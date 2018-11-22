@@ -7,7 +7,7 @@ public:
 	Player();
 	~Player();
 
-	void playurl();
+	void playurl(QString str);
 private:
 
 };
